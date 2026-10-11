@@ -1,4 +1,5 @@
-export { Server4Agent, Server, Project, Task, Build } from "./client.js";
+export { Server4Agent, Server, Project, Task, Build, TuningSession } from "./client.js";
+export type { ImportedProject, TuningStart } from "./client.js";
 export { VERSION } from "./version.js";
 export {
   Server4AgentError,

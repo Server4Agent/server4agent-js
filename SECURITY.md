@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report security issues **privately** — do not open a public issue or PR.
+Please report security issues **privately**. Do not open a public issue or PR.
 
 - Use GitHub's private vulnerability reporting on this repo (**Security → Report a
   vulnerability**), or
@@ -16,7 +16,7 @@ This SDK holds an `sk_live_` key and is meant for **server-side** use only.
 
 - Never ship it in a browser bundle or commit it to source control.
 - The client keeps the key in a private field, so `console.log(client)` and
-  `JSON.stringify(client)` will not print it — but your own logging of the raw
+  `JSON.stringify(client)` will not print it, but your own logging of the raw
   key still can. Scrub it from logs.
 - Rotate a key immediately if it may have been exposed (`client.keys.revoke(id)`).
 

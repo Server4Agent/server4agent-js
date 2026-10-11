@@ -1,6 +1,6 @@
 {
   "name": "@server4agent/sdk",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "description": "JavaScript/TypeScript client for the Server4Agent REST API.",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,7 +17,7 @@
     "CHANGELOG.md"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "publishConfig": {
     "access": "public"

@@ -46,7 +46,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function safeJsonParse(text: string): any {
+function safeJsonParse(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
@@ -88,7 +88,7 @@ export class Http {
     const impl = config.fetch ?? (typeof fetch !== "undefined" ? fetch : undefined);
     if (!impl) {
       throw new Server4AgentError(
-        "global fetch is unavailable — use Node 18+ or pass a fetch implementation via { fetch }.",
+        "global fetch is unavailable: use Node 22+ or pass a fetch implementation via { fetch }.",
       );
     }
     this.#baseUrl = config.baseUrl;
@@ -99,6 +99,11 @@ export class Http {
   }
 
   async request<T>(opts: RequestOptions): Promise<T> {
+    return (await this.send<T>(opts)).data;
+  }
+
+  /** Like `request()`, plus the status code, for the few endpoints whose answer depends on it. */
+  async send<T>(opts: RequestOptions): Promise<{ status: number; data: T }> {
     const url = new URL(opts.path.replace(/^\//, ""), this.#baseUrl.replace(/\/?$/, "/"));
     if (opts.query) {
       for (const [k, v] of Object.entries(opts.query)) {
@@ -129,7 +134,7 @@ export class Http {
         debugLog("-->", method, url.pathname);
         res = await this.#fetch(url, { method, headers, body: bodyStr, signal: controller.signal });
       } catch (err) {
-        if (opts.signal?.aborted) throw err; // caller cancelled — never retry or wrap
+        if (opts.signal?.aborted) throw err; // caller cancelled: never retry or wrap
         if (canRetryException(method, attempt, this.#maxRetries)) {
           await sleep(retryDelayMs(attempt, null));
           continue;
@@ -154,12 +159,19 @@ export class Http {
       const data = text ? safeJsonParse(text) : undefined;
 
       if (!res.ok) {
-        const code = (data && data.error) || "unknown_error";
-        const message = (data && data.message) || `Request failed with status ${res.status}`;
-        throw errorFromStatus(res.status, code, message, res.headers.get("x-request-id"));
+        const error =
+          typeof data === "object" && data !== null
+            ? (data as Record<string, unknown>)
+            : undefined;
+        const code = typeof error?.error === "string" ? error.error : "unknown_error";
+        const message =
+          typeof error?.message === "string"
+            ? error.message
+            : `Request failed with status ${res.status}`;
+        throw errorFromStatus(res.status, code, message, res.headers.get("x-request-id"), error ?? null);
       }
 
-      return data as T;
+      return { status: res.status, data: data as T };
     }
   }
 }

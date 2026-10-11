@@ -24,35 +24,45 @@ export class APITimeoutError extends APIConnectionError {
  * The API returned a 4xx/5xx response. Prefer catching a specific subclass
  * (`NotFoundError`, `RateLimitError`, ...). `code` is the machine-readable
  * string from the body; `requestId` (when present) is worth quoting to support.
+ * `body` is the whole parsed error body, for the fields some errors add: a
+ * refused file write's `reason`, or the `log_tail` of an app that would not start.
  */
 export class APIStatusError extends Server4AgentError {
   readonly status: number;
   readonly code: string;
   readonly requestId: string | null;
+  readonly body: Record<string, unknown> | null;
 
-  constructor(status: number, code: string, message: string, requestId: string | null = null) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    requestId: string | null = null,
+    body: Record<string, unknown> | null = null,
+  ) {
     super(message);
     this.status = status;
     this.code = code;
     this.requestId = requestId;
+    this.body = body;
   }
 }
 
-/** 400 — the request was malformed. */
+/** 400: the request was malformed. */
 export class BadRequestError extends APIStatusError {}
-/** 401 — the API key is missing, invalid, or revoked. */
+/** 401: the API key is missing, invalid, or revoked. */
 export class AuthenticationError extends APIStatusError {}
-/** 403 — the key is valid but not scoped to this resource. */
+/** 403: the key is valid but not scoped to this resource. */
 export class PermissionDeniedError extends APIStatusError {}
-/** 404 — no such resource. */
+/** 404: no such resource. */
 export class NotFoundError extends APIStatusError {}
-/** 409 — the request conflicts with current state (e.g. a cap was hit). */
+/** 409: the request conflicts with current state (e.g. a cap was hit). */
 export class ConflictError extends APIStatusError {}
-/** 422 — well-formed but semantically invalid. */
+/** 422: well-formed but semantically invalid. */
 export class UnprocessableEntityError extends APIStatusError {}
-/** 429 — too many requests. The SDK retries these automatically. */
+/** 429: too many requests. The SDK retries these automatically. */
 export class RateLimitError extends APIStatusError {}
-/** 5xx — something went wrong on the API side. */
+/** 5xx: something went wrong on the API side. */
 export class InternalServerError extends APIStatusError {}
 
 const STATUS_TO_ERROR: Record<number, typeof APIStatusError> = {
@@ -71,7 +81,8 @@ export function errorFromStatus(
   code: string,
   message: string,
   requestId: string | null = null,
+  body: Record<string, unknown> | null = null,
 ): APIStatusError {
   const Cls = STATUS_TO_ERROR[status] ?? (status >= 500 ? InternalServerError : APIStatusError);
-  return new Cls(status, code, message, requestId);
+  return new Cls(status, code, message, requestId, body);
 }
