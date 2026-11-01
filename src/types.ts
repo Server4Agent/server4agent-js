@@ -11,10 +11,12 @@ export type ServerAction = "start" | "stop" | "restart";
 export type ProjectVisibility = "public" | "private";
 /**
  * Who may open a public project's URL. "team" puts it behind a Server4Agent
- * sign-in and membership of the owning account; "public" is anyone with the
- * link, which is the default and how every project behaved before this.
+ * sign-in and membership of the owning account; "password" asks for a
+ * password the owner set (`accessPassword`) and needs no account; "public" is
+ * anyone with the link, which is the default and how every project behaved
+ * before this.
  */
-export type ProjectAccess = "public" | "team";
+export type ProjectAccess = "public" | "team" | "password";
 export type ProjectLifecycle = "persistent" | "ephemeral";
 export type ProjectRuntimeStatus = "unbuilt" | "running" | "paused";
 export type TaskStatus = "running" | "completed" | "failed" | "awaiting_input" | "cancelled";
@@ -62,16 +64,6 @@ export const TASK_TERMINAL_STATES: readonly TaskStatus[] = [
   "awaiting_input",
 ];
 export const BUILD_TERMINAL_STATES: readonly BuildStatus[] = ["completed"];
-
-/**
- * Where a tuning run is. "building" stands the agent's code up from its own
- * source first; "fixing" has the on-server agent working on the brief;
- * "reported" means the outcome reached the evaluation platform; "failed" means
- * the code could not be brought up or the fix did not land.
- */
-export type TuningStatus = "building" | "fixing" | "reported" | "failed";
-/** A tuning poll stops here: the outcome is reported, or the run is over. */
-export const TUNING_TERMINAL_STATES: readonly TuningStatus[] = ["reported", "failed"];
 
 /** What a task changed in the workspace, as one commit. */
 export interface TaskChange {
@@ -289,9 +281,14 @@ export interface AccountSummary {
     /** The ceiling that pauses new tasks (your cap or the plan's credits), or null if none. */
     hardLimitUsd: number | null;
     overageAllowed: boolean;
-    /** True when new tasks are blocked right now; `reason` says which ceiling. */
+    /**
+     * True when new tasks are blocked right now; `reason` says why: which
+     * ceiling was reached, or `"ai_disabled"` when agent tasks are turned off
+     * for the account. Only agent tasks stop; files, commands and deploys keep
+     * working either way.
+     */
     blocked: boolean;
-    reason: "budget_cap" | "credits_exhausted" | null;
+    reason: "budget_cap" | "credits_exhausted" | "ai_disabled" | null;
   };
   /** The key this request was made with. */
   authenticatedKey: { id: string; label: string };
@@ -371,8 +368,6 @@ export const WEBHOOK_EVENTS = [
   "quota.threshold",
   "quota.cap_reached",
   "quota.egress_cap_reached",
-  "tuning.started",
-  "tuning.completed",
 ] as const;
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
@@ -390,55 +385,6 @@ export interface CreatedWebhook extends Webhook {
   secret: string;
 }
 
-/** What a tuning run that built its own project stood up. */
-export interface TuningBuild {
-  /** The new project the agent's code was built into. */
-  projectId: string;
-  /** Where the code came from, as the evaluation platform named it. */
-  source: {
-    kind: "git" | "archive";
-    repoUrl?: string;
-    ref?: string;
-    subdir?: string;
-    /** The secret on this account holding a clone token, for a private repository. */
-    cloneTokenSecretName?: string;
-    archiveUrl?: string;
-  };
-  /** Environment variables the agent needs, by name. Their values come from this account's secrets. */
-  envKeys: string[];
-}
-
-/** Options for starting a tuning run. Pass `projectId` or `serverId`. */
-export interface StartTuningOptions {
-  /** The improvement proposal id on the evaluation platform. */
-  proposalId: string;
-  /** The project already holding the agent's code. The fix happens in it. */
-  projectId?: string;
-  /**
-   * Build the agent's code into a new project on this server instead, when it
-   * is not here yet. The fix starts once bring-up finishes.
-   */
-  serverId?: string;
-  /** Base URL of the evaluation API. HTTPS only. Account-wide keys only. */
-  evaluationApiBase?: string;
-  /**
-   * Name of the secret holding the evaluation API key. Defaults to
-   * AGENTX_API_KEY. Account-wide keys only.
-   */
-  keySecret?: string;
-}
-
-/** Your own account of a tuning run's fix, sent to the evaluation platform. */
-export interface TuningReport {
-  /** What changed and why, written for someone who has not seen the diff. */
-  changeSummary?: string;
-  changedFiles?: string[];
-  /** Where the fixed agent is reachable, if it is deployed somewhere. */
-  deploymentUrl?: string;
-  /** Set when the issues could not be fixed, so the run closes as failed. */
-  failed?: boolean;
-}
-
 /** Options accepted when creating a project. */
 export interface CreateProjectOptions {
   name?: string;
@@ -446,6 +392,12 @@ export interface CreateProjectOptions {
   visibility?: ProjectVisibility;
   /** Defaults to "public". Only meaningful once visibility is "public". */
   access?: ProjectAccess;
+  /**
+   * The password visitors enter, required with `access: "password"` and
+   * refused with any other access. At least 4 characters, so a 4 digit code
+   * works. Stored encrypted and never returned.
+   */
+  accessPassword?: string;
   lifecycle?: ProjectLifecycle;
   /**
    * Template id from `templates.list()`, e.g. "flight-watcher". Shorthand for
@@ -470,6 +422,13 @@ export interface UpdateProjectOptions {
   description?: string;
   visibility?: ProjectVisibility;
   access?: ProjectAccess;
+  /**
+   * Set or change the password for `access: "password"`. Required when
+   * switching to password unless one is already set; sent alone, it changes
+   * the password and signs out everyone who used the old one. Switching to any
+   * other access discards it. At least 4 characters, never returned.
+   */
+  accessPassword?: string;
   lifecycle?: ProjectLifecycle;
   /**
    * Replace the stored run plan wholesale, so send every field you want kept.

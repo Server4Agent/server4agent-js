@@ -48,6 +48,8 @@ await server.refresh();                  // re-fetch in place
 
 const project = await client.projects.get("prj_xyz");
 await project.update({ visibility: "public" });
+// Ask visitors for a password before the URL opens. No account needed to get in.
+await project.update({ access: "password", accessPassword: "a long shared passphrase" });
 ```
 
 Every handle method also has a flat form on the client that takes ids
@@ -165,17 +167,6 @@ const me = await client.me();
 if (me.usage.blocked) console.log("out of budget:", me.usage.reason);
 ```
 
-## Tuning runs
-
-Fix an agent from an evaluation platform's report. Reading a run is what moves
-it along, so `wait()` polls until the outcome is reported:
-
-```ts
-const { session } = await client.tuning.start({ proposalId: "prop_123", projectId: project.id });
-await session.wait();                      // "reported" or "failed", or the run asks a question
-console.log(session.status, session.changeSummary, session.run?.question);
-await session.report({ changeSummary: "Grounded answers in the product docs" });
-```
 ## Errors
 
 Every failure is an instance of `Server4AgentError`, so you can catch broadly or
@@ -234,7 +225,7 @@ Runnable scripts in [`examples/`](examples/):
 ## API surface
 
 `servers`, `projects`, `templates`, `tasks`, `builds`, `files`, `secrets`,
-`tuning`, `keys`, `webhooks`, and `client.me()`. Every REST endpoint has a
+`keys`, `webhooks`, and `client.me()`. Every REST endpoint has a
 method; see the [REST API docs](https://www.server4agent.com/docs/api) for the
 endpoint each one wraps.
 

@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.10.0
+
+Tuning runs are removed. The API no longer has the `/tuning/sessions`
+endpoints, so the client no longer calls them. This is a breaking change.
+
+- `client.tuning` is gone, with `list()`, `start()`, `get()` and `report()`,
+  and so are the `TuningSession` handle and the `TuningStart`,
+  `TuningStatus`, `TuningBuild`, `StartTuningOptions` and `TuningReport`
+  types, and `TUNING_TERMINAL_STATES`.
+- `WEBHOOK_EVENTS` no longer lists `tuning.started` or `tuning.completed`, and
+  `webhooks.create()` with either is refused as an unknown event. Nothing
+  sends them any more. A webhook created before they were retired may still
+  have them stored; `webhooks.list()` leaves them off its `events`.
+
+## 0.9.0
+
+`me().usage.reason` can now be `"ai_disabled"`.
+
+- The account's agent tasks have been turned off by Server4Agent, so
+  `usage.blocked` is true with no spend ceiling reached. It stays that way
+  through a new billing month, a plan change or a raised budget cap, until it
+  is turned back on. As with the other reasons, only new agent tasks are
+  refused: files, commands, apps and deploys keep working. Code that switches
+  on `reason` should handle the new value.
+
+## 0.8.0
+
+Projects can put their URL behind a password.
+
+- `ProjectAccess` gains `"password"`: a visitor to the project's URL is asked
+  for a password the owner set, and gets in without any account. A project
+  read from the API can now report it, so code that switches on `access`
+  should handle the new value.
+- `projects.create()` and `project.update()` take `accessPassword`, sent as
+  `access_password`. It is required when switching to `access: "password"`
+  unless a password is already set, and refused with any other access. Sent on
+  its own to a password project, it changes the password and signs out
+  everyone who used the old one. Switching to another access discards it. It
+  is at least 4 characters (a 4 digit code works), stored encrypted, and
+  never returned by the API.
+
 ## 0.7.0
 
 Every REST endpoint now has a method. Nothing that worked in 0.6.0 changes

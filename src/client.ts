@@ -32,16 +32,11 @@ import {
   type ServerStatus,
   type ServerTier,
   type StartAppResult,
-  type StartTuningOptions,
   type TaskChange,
   type TaskMessageType,
   type TaskStatus,
   TASK_TERMINAL_STATES,
   type TaskUsage,
-  type TuningBuild,
-  type TuningReport,
-  type TuningStatus,
-  TUNING_TERMINAL_STATES,
   type UpdateProjectOptions,
   type Webhook,
   type WebhookEvent,
@@ -131,7 +126,7 @@ function toSource(r: SourceRaw): ProjectSource {
 }
 
 function createProjectBody(o: CreateProjectOptions) {
-  const { source, autoInit, ...rest } = o;
+  const { source, autoInit, accessPassword, ...rest } = o;
   let wireSource: Record<string, unknown> | undefined;
   if (source) {
     switch (source.kind) {
@@ -151,12 +146,12 @@ function createProjectBody(o: CreateProjectOptions) {
         wireSource = { ...source };
     }
   }
-  return { ...rest, source: wireSource, auto_init: autoInit };
+  return { ...rest, access_password: accessPassword, source: wireSource, auto_init: autoInit };
 }
 
 function updateProjectBody(o: UpdateProjectOptions) {
-  const { runPlan, ...rest } = o;
-  return { ...rest, run_plan: runPlan };
+  const { runPlan, accessPassword, ...rest } = o;
+  return { ...rest, access_password: accessPassword, run_plan: runPlan };
 }
 
 /** What an import adds to the project it created. */
@@ -211,100 +206,6 @@ interface WebhookRaw {
   url: string;
   events: WebhookEvent[];
   created_at: string;
-}
-
-interface TuningSessionRaw {
-  id: string;
-  serverId: string;
-  projectId: string;
-  runId?: string | null;
-  buildRunId?: string | null;
-  proposalId: string;
-  evaluationApiBase: string;
-  keySecretKey: string;
-  briefPath?: string | null;
-  briefRevision?: string | null;
-  status: TuningStatus;
-  changeSummary?: string | null;
-  changedFiles?: string[];
-  deploymentUrl?: string | null;
-  reportedAt?: string | null;
-  reportError?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** The agent run behind a tuning session, in the snake_case shape that endpoint returns. */
-interface RunRaw {
-  run_id: string;
-  server_id: string;
-  project_id?: string | null;
-  goal: string;
-  message_type?: TaskMessageType;
-  status: TaskStatus;
-  created_at: string;
-  log?: string | null;
-  result?: string | null;
-  question?: string | null;
-  change?: {
-    commit: string;
-    branch?: string | null;
-    merge_commit?: string | null;
-    files_changed: number;
-    insertions: number;
-    deletions: number;
-    files: string[];
-  } | null;
-  usage?: {
-    cost_usd: number;
-    input_tokens: number;
-    output_tokens: number;
-    cache_read_tokens: number;
-    cache_write_tokens: number;
-    turns: number;
-    duration_ms: number;
-    cost_source?: TaskUsage["costSource"] | null;
-  } | null;
-}
-
-function runToTask(r: RunRaw): TaskRaw {
-  const c = r.change;
-  const u = r.usage;
-  return {
-    id: r.run_id,
-    serverId: r.server_id,
-    projectId: r.project_id ?? null,
-    goal: r.goal,
-    messageType: r.message_type,
-    status: r.status,
-    createdAt: r.created_at,
-    result: r.result ?? undefined,
-    question: r.question ?? undefined,
-    log: r.log ?? undefined,
-    change: c
-      ? {
-          commit: c.commit,
-          ...(c.branch ? { branch: c.branch } : {}),
-          ...(c.merge_commit ? { mergeCommit: c.merge_commit } : {}),
-          filesChanged: c.files_changed,
-          insertions: c.insertions,
-          deletions: c.deletions,
-          files: c.files,
-        }
-      : undefined,
-    usage: u
-      ? {
-          cost: u.cost_usd,
-          inputTokens: u.input_tokens,
-          outputTokens: u.output_tokens,
-          cacheReadTokens: u.cache_read_tokens,
-          cacheWriteTokens: u.cache_write_tokens,
-          turns: u.turns,
-          durationMs: u.duration_ms,
-          ...(u.cost_source ? { costSource: u.cost_source } : {}),
-        }
-      : undefined,
-  };
 }
 
 interface DeploymentRaw {
@@ -783,7 +684,7 @@ export interface ImportedProject {
 interface WaitOptions<T> {
   /** Milliseconds between polls. Default 2000. */
   pollIntervalMs?: number;
-  /** Give up after this many milliseconds. Default 300000 (tasks), 600000 (builds), 1800000 (tuning). */
+  /** Give up after this many milliseconds. Default 300000 (tasks), 600000 (builds). */
   timeoutMs?: number;
   /** Called with the handle after each poll, to stream progress to a log or UI. */
   onProgress?: (self: T) => void;
@@ -919,143 +820,6 @@ export class Build extends Handle {
     }
     return this;
   }
-}
-
-/**
- * A tuning run: the on-server agent fixing an agent from an evaluation
- * platform's report, then reporting back what changed. Reading it is what
- * advances it, so `refresh()` and `wait()` also move it along.
- */
-export class TuningSession extends Handle {
-  id!: string;
-  serverId!: string;
-  projectId!: string;
-  /** The agent run doing the fix. Null while status is "building". */
-  runId!: string | null;
-  /** The bring-up run, when this session built the project from the agent's own source. */
-  buildRunId!: string | null;
-  /** The improvement proposal id on the evaluation platform. */
-  proposalId!: string;
-  evaluationApiBase!: string;
-  /** Name of the secret holding the evaluation API key. Never its value. */
-  keySecretKey!: string;
-  /** Where the brief was written, relative to the project's workspace. Null until the fix run starts. */
-  briefPath!: string | null;
-  briefRevision!: string | null;
-  status!: TuningStatus;
-  changeSummary!: string | null;
-  changedFiles!: string[];
-  deploymentUrl!: string | null;
-  /** When the outcome reached the platform. Null until it has. */
-  reportedAt!: string | null;
-  /** Why the last report attempt failed. The next read retries. */
-  reportError!: string | null;
-  createdAt!: string;
-  updatedAt!: string;
-  /**
-   * The agent run behind the session as of the last `get()` or `refresh()`:
-   * the bring-up while status is "building", the fix after that. Null from
-   * `list()`, `start()` and `report()`, which do not read it.
-   */
-  run: Task | null = null;
-
-  constructor(http: Http, raw: TuningSessionRaw, run?: RunRaw | null) {
-    super(http);
-    this.assign(raw, run);
-  }
-
-  private assign(r: TuningSessionRaw, run?: RunRaw | null): void {
-    this.id = r.id;
-    this.serverId = r.serverId;
-    this.projectId = r.projectId;
-    this.runId = r.runId ?? null;
-    this.buildRunId = r.buildRunId ?? null;
-    this.proposalId = r.proposalId;
-    this.evaluationApiBase = r.evaluationApiBase;
-    this.keySecretKey = r.keySecretKey;
-    this.briefPath = r.briefPath ?? null;
-    this.briefRevision = r.briefRevision ?? null;
-    this.status = r.status;
-    this.changeSummary = r.changeSummary ?? null;
-    this.changedFiles = r.changedFiles ?? [];
-    this.deploymentUrl = r.deploymentUrl ?? null;
-    this.reportedAt = r.reportedAt ?? null;
-    this.reportError = r.reportError ?? null;
-    this.createdAt = r.createdAt;
-    this.updatedAt = r.updatedAt;
-    if (run !== undefined) this.run = run ? new Task(this.http, runToTask(run)) : null;
-  }
-
-  async refresh(): Promise<this> {
-    const r = await this.http.request<{ session: TuningSessionRaw; run: RunRaw | null }>({
-      path: `/tuning/sessions/${seg(this.id)}`,
-    });
-    this.assign(r.session, r.run ?? null);
-    return this;
-  }
-
-  /**
-   * Send your own account of the fix to the evaluation platform, instead of
-   * letting it be read off the run's final message.
-   */
-  async report(result: TuningReport): Promise<this> {
-    const r = await this.http.request<{ session: TuningSessionRaw }>({
-      method: "PATCH",
-      path: `/tuning/sessions/${seg(this.id)}`,
-      body: tuningReportBody(result),
-    });
-    this.assign(r.session);
-    return this;
-  }
-
-  /**
-   * Resolve once the session is "reported" or "failed", or its run stops to
-   * ask a question ("awaiting_input"), since nothing moves until someone
-   * answers it. Each poll is a read, which is what advances the session.
-   */
-  async wait(opts: WaitOptions<this> = {}): Promise<this> {
-    const interval = opts.pollIntervalMs ?? 2000;
-    const deadline = Date.now() + (opts.timeoutMs ?? 1_800_000);
-    while (!TUNING_TERMINAL_STATES.includes(this.status) && this.run?.status !== "awaiting_input") {
-      if (opts.signal?.aborted) throw opts.signal.reason ?? new Server4AgentError("wait() aborted.");
-      if (Date.now() >= deadline) {
-        throw new APITimeoutError(`Tuning session ${this.id} still ${this.status} after timeout.`);
-      }
-      await sleep(interval);
-      await this.refresh();
-      opts.onProgress?.(this);
-    }
-    return this;
-  }
-}
-
-/** What `tuning.start()` returned. */
-export interface TuningStart {
-  session: TuningSession;
-  /**
-   * False when a run already existed for this proposal: that run comes back
-   * instead of a second one starting on the same brief.
-   */
-  started: boolean;
-  /**
-   * False when the brief was issued before the platform finished its analysis,
-   * so it carries per-case judgements but no summarised diagnosis. Null when
-   * the API did not say (an existing run, or a build from source).
-   */
-  analysisReady: boolean | null;
-  /** Set when this call built a new project from the agent's own source. */
-  built: TuningBuild | null;
-  /** The run started but the platform could not be told. The next status report retries. */
-  warning: string | null;
-}
-
-function tuningReportBody(r: TuningReport) {
-  return {
-    change_summary: r.changeSummary,
-    changed_files: r.changedFiles,
-    deployment_url: r.deploymentUrl,
-    failed: r.failed,
-  };
 }
 
 // =============================================================================
@@ -1572,69 +1336,6 @@ class SecretsResource {
   }
 }
 
-class TuningResource {
-  constructor(private readonly http: Http) {}
-
-  /** Tuning runs, newest first, optionally narrowed to one project or status. */
-  async list(opts: { projectId?: string; status?: TuningStatus } = {}): Promise<TuningSession[]> {
-    const r = await this.http.request<{ sessions: TuningSessionRaw[] }>({
-      path: "/tuning/sessions",
-      query: { project_id: opts.projectId, status: opts.status },
-    });
-    return r.sessions.map((t) => new TuningSession(this.http, t));
-  }
-
-  /**
-   * Start a tuning run: fetch the platform's brief for a proposal, write it
-   * into the project's workspace, and set the agent to fix what it found.
-   * Needs a secret on the account holding the evaluation API key. Calling
-   * again with the same `proposalId` returns the run already under way.
-   */
-  async start(opts: StartTuningOptions): Promise<TuningStart> {
-    const { status, data: r } = await this.http.send<{
-      session: TuningSessionRaw;
-      analysisReady?: boolean;
-      built?: TuningBuild;
-      warning?: string;
-    }>({
-      method: "POST",
-      path: "/tuning/sessions",
-      body: {
-        proposal_id: opts.proposalId,
-        project_id: opts.projectId,
-        server_id: opts.serverId,
-        evaluation_api_base: opts.evaluationApiBase,
-        key_secret: opts.keySecret,
-      },
-    });
-    return {
-      session: new TuningSession(this.http, r.session),
-      started: status === 201,
-      analysisReady: r.analysisReady ?? null,
-      built: r.built ?? null,
-      warning: r.warning ?? null,
-    };
-  }
-
-  /** Read a tuning run, which also advances it. `session.run` is filled in. */
-  async get(tuningSessionId: string): Promise<TuningSession> {
-    const r = await this.http.request<{ session: TuningSessionRaw; run: RunRaw | null }>({
-      path: `/tuning/sessions/${seg(tuningSessionId)}`,
-    });
-    return new TuningSession(this.http, r.session, r.run ?? null);
-  }
-
-  /** See `TuningSession.report()`. */
-  async report(tuningSessionId: string, result: TuningReport): Promise<TuningSession> {
-    const r = await this.http.request<{ session: TuningSessionRaw }>({
-      method: "PATCH",
-      path: `/tuning/sessions/${seg(tuningSessionId)}`,
-      body: tuningReportBody(result),
-    });
-    return new TuningSession(this.http, r.session);
-  }
-}
-
 class KeysResource {
   constructor(private readonly http: Http) {}
 
@@ -1724,7 +1425,6 @@ export class Server4Agent {
   readonly builds: BuildsResource;
   readonly files: FilesResource;
   readonly secrets: SecretsResource;
-  readonly tuning: TuningResource;
   readonly keys: KeysResource;
   readonly webhooks: WebhooksResource;
 
@@ -1748,7 +1448,6 @@ export class Server4Agent {
     this.builds = new BuildsResource(this.http);
     this.files = new FilesResource(this.http);
     this.secrets = new SecretsResource(this.http);
-    this.tuning = new TuningResource(this.http);
     this.keys = new KeysResource(this.http);
     this.webhooks = new WebhooksResource(this.http);
   }

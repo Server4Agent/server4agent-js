@@ -4,7 +4,6 @@ import {
   Server,
   Project,
   Task,
-  TuningSession,
   Server4AgentError,
   APIStatusError,
   ConflictError,
@@ -419,48 +418,6 @@ function secretRaw(overrides: Record<string, unknown> = {}) {
     project_ids: [],
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-02T00:00:00Z",
-    ...overrides,
-  };
-}
-
-function tuningRaw(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "tun_1",
-    serverId: "srv_1",
-    projectId: "proj_1",
-    runId: "tsk_9",
-    buildRunId: null,
-    proposalId: "prop_1",
-    evaluationApiBase: "https://evals.northstar.example",
-    keySecretKey: "EVAL_KEY",
-    briefPath: ".tuning/brief.md",
-    briefRevision: "r1",
-    status: "fixing",
-    changeSummary: null,
-    changedFiles: [],
-    deploymentUrl: null,
-    reportedAt: null,
-    reportError: null,
-    createdAt: "2026-01-01T00:00:00Z",
-    updatedAt: "2026-01-01T00:00:00Z",
-    ...overrides,
-  };
-}
-
-function runRaw(overrides: Record<string, unknown> = {}) {
-  return {
-    run_id: "tsk_9",
-    server_id: "srv_1",
-    project_id: "proj_1",
-    goal: "Fix the failing cases",
-    message_type: "system",
-    status: "running",
-    created_at: "2026-01-01T00:00:00Z",
-    log: null,
-    result: null,
-    question: null,
-    change: null,
-    usage: null,
     ...overrides,
   };
 }
@@ -939,152 +896,31 @@ describe("REST coverage", () => {
       expect(p.access).toBe("team");
     });
 
-    it("knows every webhook event the API accepts", () => {
-      expect(WEBHOOK_EVENTS).toEqual(
-        expect.arrayContaining(["quota.egress_cap_reached", "tuning.started", "tuning.completed"]),
-      );
-    });
-  });
+    it("sends accessPassword as access_password on create and update", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(projectRaw({ access: "password" })));
+      fetchMock.mockResolvedValueOnce(jsonResponse(projectRaw({ access: "password" })));
 
-  describe("tuning", () => {
-    it("tuning.list filters by project and status and returns handles", async () => {
-      fetchMock.mockResolvedValueOnce(jsonResponse({ sessions: [tuningRaw()] }));
-
-      const [s] = await client.tuning.list({ projectId: "proj_1", status: "fixing" });
-
-      expect(call(0).url.pathname).toBe("/tuning/sessions");
-      expect(call(0).url.searchParams.get("project_id")).toBe("proj_1");
-      expect(call(0).url.searchParams.get("status")).toBe("fixing");
-      expect(s).toBeInstanceOf(TuningSession);
-      expect(s).toMatchObject({ id: "tun_1", proposalId: "prop_1", runId: "tsk_9", status: "fixing", run: null });
-    });
-
-    it("tuning.start sends snake_case and says it started a run on 201", async () => {
-      fetchMock.mockResolvedValueOnce(
-        jsonResponse({ session: tuningRaw(), analysisReady: false, warning: "platform not told" }, 201),
-      );
-
-      const r = await client.tuning.start({
-        proposalId: "prop_1",
-        projectId: "proj_1",
-        evaluationApiBase: "https://evals.northstar.example",
-        keySecret: "EVAL_KEY",
+      const created = await client.projects.create("srv_1", {
+        name: "preview",
+        access: "password",
+        accessPassword: "correct horse battery",
       });
+      await client.projects.update(HOSTILE, { accessPassword: "a new passphrase" });
 
-      expect(call(0).method).toBe("POST");
-      expect(call(0).url.pathname).toBe("/tuning/sessions");
-      expect(call(0).body).toEqual({
-        proposal_id: "prop_1",
-        project_id: "proj_1",
-        evaluation_api_base: "https://evals.northstar.example",
-        key_secret: "EVAL_KEY",
+      expect(call(0).body).toMatchObject({
+        name: "preview",
+        access: "password",
+        access_password: "correct horse battery",
       });
-      expect(r.started).toBe(true);
-      expect(r.analysisReady).toBe(false);
-      expect(r.warning).toBe("platform not told");
-      expect(r.built).toBeNull();
-      expect(r.session.id).toBe("tun_1");
+      expect(call(0).body).not.toHaveProperty("accessPassword");
+      expect(call(1).body).toEqual({ access_password: "a new passphrase" });
+      expect(created.access).toBe("password");
     });
 
-    it("tuning.start returns the run already under way on 200, and what a build stood up", async () => {
-      fetchMock.mockResolvedValueOnce(
-        jsonResponse({ session: tuningRaw(), message: "A tuning run already exists for this proposal." }),
-      );
-      const existing = await client.tuning.start({ proposalId: "prop_1", projectId: "proj_1" });
-      expect(existing.started).toBe(false);
-      expect(existing.analysisReady).toBeNull();
-
-      const built = {
-        projectId: "proj_5",
-        source: { kind: "git", repoUrl: "https://git.northstar.example/agent.git", ref: "main" },
-        envKeys: ["PINECONE_KEY"],
-      };
-      fetchMock.mockResolvedValueOnce(
-        jsonResponse({ session: tuningRaw({ status: "building", runId: null, buildRunId: "tsk_4" }), built }, 201),
-      );
-      const fresh = await client.tuning.start({ proposalId: "prop_2", serverId: "srv_1" });
-      expect(call(1).body).toEqual({ proposal_id: "prop_2", server_id: "srv_1" });
-      expect(fresh.started).toBe(true);
-      expect(fresh.built).toEqual(built);
-      expect(fresh.session).toMatchObject({ status: "building", runId: null, buildRunId: "tsk_4" });
-    });
-
-    it("tuning.get escapes the id and maps the run behind it to a Task", async () => {
-      fetchMock.mockResolvedValueOnce(jsonResponse({ session: tuningRaw(), run: runRaw({ status: "awaiting_input", question: "Which branch?" }) }));
-
-      const s = await client.tuning.get(HOSTILE);
-
-      expect(call(0).url.pathname).toBe(`/tuning/sessions/${HOSTILE_SEG}`);
-      expect(s.run).toBeInstanceOf(Task);
-      expect(s.run).toMatchObject({
-        id: "tsk_9",
-        serverId: "srv_1",
-        projectId: "proj_1",
-        messageType: "system",
-        status: "awaiting_input",
-        question: "Which branch?",
-      });
-    });
-
-    it("report PATCHes snake_case and updates the handle", async () => {
-      fetchMock.mockResolvedValueOnce(jsonResponse({ session: tuningRaw() }));
-      const s = await client.tuning.get("tun_1");
-      fetchMock.mockResolvedValueOnce(
-        jsonResponse({
-          session: tuningRaw({ status: "reported", changeSummary: "Grounded answers in the docs", changedFiles: ["agent.py"] }),
-        }),
-      );
-
-      await s.report({ changeSummary: "Grounded answers in the docs", changedFiles: ["agent.py"], failed: false });
-
-      expect(call(1).method).toBe("PATCH");
-      expect(call(1).url.pathname).toBe("/tuning/sessions/tun_1");
-      expect(call(1).body).toEqual({
-        change_summary: "Grounded answers in the docs",
-        changed_files: ["agent.py"],
-        failed: false,
-      });
-      expect(s.status).toBe("reported");
-      expect(s.changedFiles).toEqual(["agent.py"]);
-    });
-
-    it("tuning.report escapes the id", async () => {
-      fetchMock.mockResolvedValueOnce(jsonResponse({ session: tuningRaw({ status: "failed" }) }));
-
-      const s = await client.tuning.report(HOSTILE, { failed: true });
-
-      expect(call(0).url.pathname).toBe(`/tuning/sessions/${HOSTILE_SEG}`);
-      expect(call(0).body).toEqual({ failed: true });
-      expect(s.status).toBe("failed");
-    });
-
-    it("wait() reads until the outcome is reported", async () => {
-      fetchMock.mockResolvedValueOnce(jsonResponse({ session: tuningRaw() }, 201));
-      const { session } = await client.tuning.start({ proposalId: "prop_1", projectId: "proj_1" });
-      fetchMock
-        .mockResolvedValueOnce(jsonResponse({ session: tuningRaw(), run: runRaw() }))
-        .mockResolvedValueOnce(jsonResponse({ session: tuningRaw({ status: "reported" }), run: runRaw({ status: "completed" }) }));
-
-      const seen: string[] = [];
-      await session.wait({ pollIntervalMs: 0, onProgress: (s) => seen.push(s.status) });
-
-      expect(seen).toEqual(["fixing", "reported"]);
-      expect(session.run?.status).toBe("completed");
-      expect(call(2).url.pathname).toBe("/tuning/sessions/tun_1");
-    });
-
-    it("wait() stops when the run behind it is waiting on an answer", async () => {
-      fetchMock.mockResolvedValueOnce(jsonResponse({ sessions: [tuningRaw()] }));
-      const [session] = await client.tuning.list();
-      fetchMock.mockResolvedValueOnce(
-        jsonResponse({ session: tuningRaw(), run: runRaw({ status: "awaiting_input", question: "Which branch?" }) }),
-      );
-
-      await session.wait({ pollIntervalMs: 0 });
-
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(session.status).toBe("fixing");
-      expect(session.run?.question).toBe("Which branch?");
+    it("knows every webhook event the API accepts, and none it retired", () => {
+      expect(WEBHOOK_EVENTS).toContain("quota.egress_cap_reached");
+      expect(WEBHOOK_EVENTS).not.toContain("tuning.started");
+      expect(WEBHOOK_EVENTS).not.toContain("tuning.completed");
     });
   });
 });
@@ -1330,31 +1166,5 @@ describe("REST coverage: apps, account, project sources", () => {
 
     expect(ts.map((t) => t.sourceKind)).toEqual(["git", null, null]);
     expect(Object.keys(ts[0])).not.toContain("source_kind");
-  });
-
-  it("maps the tuning run's change and usage to camelCase", async () => {
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse({
-        session: tuningRaw({ status: "reported" }),
-        run: runRaw({
-          status: "completed",
-          log: "done",
-          change: { commit: "abc", branch: "task/fix", merge_commit: "def", files_changed: 1, insertions: 4, deletions: 2, files: ["agent.py"] },
-          usage: {
-            cost_usd: 0.3, input_tokens: 10, output_tokens: 20, cache_read_tokens: 0, cache_write_tokens: 0,
-            turns: 2, duration_ms: 900, cost_source: "estimated",
-          },
-        }),
-      }),
-    );
-
-    const s = await client.tuning.get("tun_1");
-
-    expect(s.run?.log).toBe("done");
-    expect(s.run?.change).toEqual({ commit: "abc", branch: "task/fix", mergeCommit: "def", filesChanged: 1, insertions: 4, deletions: 2, files: ["agent.py"] });
-    expect(s.run?.usage).toEqual({
-      cost: 0.3, inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0,
-      turns: 2, durationMs: 900, costSource: "estimated",
-    });
   });
 });
